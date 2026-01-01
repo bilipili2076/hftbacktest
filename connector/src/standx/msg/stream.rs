@@ -5,9 +5,11 @@ use super::{from_str_to_ord_type, from_str_to_side, from_str_to_status, from_str
 
 #[derive(Debug, Deserialize)]
 pub struct Frame {
-    pub channel: String,
+    #[serde(default)]
+    pub channel: Option<String>,
     #[serde(default)]
     pub symbol: Option<String>,
+    #[serde(default)]
     pub data: serde_json::Value,
 }
 
@@ -52,8 +54,8 @@ impl OrderUpdate {
 
 impl Frame {
     pub fn into_event(self) -> StreamEvent {
-        match self.channel.as_str() {
-            "order" => serde_json::from_value::<OrderUpdate>(self.data)
+        match self.channel.as_deref() {
+            Some("order") => serde_json::from_value::<OrderUpdate>(self.data)
                 .map(StreamEvent::Order)
                 .unwrap_or(StreamEvent::Unknown),
             _ => StreamEvent::Unknown,
