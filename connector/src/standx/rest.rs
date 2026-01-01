@@ -5,6 +5,7 @@ use ed25519_dalek::{Signer, SigningKey, pkcs8::DecodePrivateKey};
 use hftbacktest::types::{OrdType, Side, TimeInForce};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use tokio::time::Duration;
+use tracing::warn;
 
 use crate::standx::{
     StandxError,
@@ -22,35 +23,37 @@ pub struct StandxClient {
     http: reqwest::Client,
 }
 
-fn parse_signing_key(raw: &str) -> Result<Option<SigningKey>, StandxError> {
-    if raw.trim().is_empty() {
-        return Ok(None);
+fn parse_signing_key(raw: &str) -> Option<SigningKey> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
     }
 
-    if let Ok(key) = SigningKey::from_pkcs8_pem(raw) {
-        return Ok(Some(key));
+    if let Ok(key) = SigningKey::from_pkcs8_pem(trimmed) {
+        return Some(key);
     }
 
     let engine = base64::engine::general_purpose::STANDARD;
-    if let Ok(decoded) = engine.decode(raw.as_bytes()) {
+    if let Ok(decoded) = engine.decode(trimmed.as_bytes()) {
         if decoded.len() == 32 {
             let mut buf = [0u8; 32];
             buf.copy_from_slice(&decoded);
-            return Ok(Some(SigningKey::from_bytes(&buf)));
+            return Some(SigningKey::from_bytes(&buf));
         }
     }
 
-    if raw.len() == 64 {
-        if let Ok(decoded) = hex::decode(raw) {
+    if trimmed.len() == 64 {
+        if let Ok(decoded) = hex::decode(trimmed) {
             if decoded.len() == 32 {
                 let mut buf = [0u8; 32];
                 buf.copy_from_slice(&decoded);
-                return Ok(Some(SigningKey::from_bytes(&buf)));
+                return Some(SigningKey::from_bytes(&buf));
             }
         }
     }
 
-    Err(StandxError::InvalidSigningKey)
+    warn!("StandX signing_key could not be parsed; request signing will be disabled");
+    None
 }
 
 impl StandxClient {
@@ -76,7 +79,7 @@ impl StandxClient {
             market_ws_url: market_ws_url.to_string(),
             order_ws_url: order_ws_url.to_string(),
             jwt_token: jwt_token.to_string(),
-            signing_key: parse_signing_key(signing_key)?,
+            signing_key: parse_signing_key(signing_key),
             session_id: session_id.to_string(),
             http,
         })
@@ -123,9 +126,10 @@ impl StandxClient {
         );
         headers.insert(
             "x-request-signature",
-            HeaderValue::from_str(&base64::engine::general_purpose::STANDARD
-                .encode(signature.to_bytes()))
-                .unwrap(),
+            HeaderValue::from_str(
+                &base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+            )
+            .unwrap(),
         );
         Ok(headers)
     }
