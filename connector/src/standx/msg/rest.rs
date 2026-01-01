@@ -1,52 +1,72 @@
 use hftbacktest::types::{OrdType, Side, Status, TimeInForce};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    from_str_to_ord_type, from_str_to_side, from_str_to_status, from_str_to_tif, serialize_ord_type,
-    serialize_side, serialize_tif,
-};
+use super::{from_str_to_ord_type, from_str_to_side, from_str_to_status, from_str_to_tif};
 
 #[derive(Debug, Serialize)]
-pub struct SubmitOrderRequest {
-    pub client_order_id: String,
+pub struct NewOrderRequest {
     pub symbol: String,
-    #[serde(serialize_with = "serialize_side")]
+    #[serde(serialize_with = "super::serialize_side")]
     pub side: Side,
-    pub price: f64,
-    pub qty: f64,
-    #[serde(serialize_with = "serialize_ord_type")]
+    #[serde(serialize_with = "super::serialize_ord_type")]
     pub order_type: OrdType,
-    #[serde(serialize_with = "serialize_tif")]
+    pub qty: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<String>,
+    #[serde(serialize_with = "super::serialize_tif")]
     pub time_in_force: TimeInForce,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cl_ord_id: Option<String>,
+    #[serde(default)]
+    pub reduce_only: bool,
 }
 
 #[derive(Debug, Serialize)]
 pub struct CancelOrderRequest {
-    pub client_order_id: String,
-    pub symbol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cl_ord_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct OrderResponse {
-    pub order_id: i64,
-    pub client_order_id: String,
+pub struct BasicResponse {
+    pub code: i64,
+    pub message: String,
+    #[serde(default)]
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct OrderDetail {
+    #[serde(default)]
+    pub id: Option<i64>,
+    #[serde(default)]
+    pub cl_ord_id: Option<String>,
     pub symbol: String,
-    #[serde(deserialize_with = "from_str_to_status")]
-    pub status: Status,
     #[serde(deserialize_with = "from_str_to_side")]
     pub side: Side,
     #[serde(deserialize_with = "from_str_to_ord_type")]
     pub order_type: OrdType,
     #[serde(deserialize_with = "from_str_to_tif")]
     pub time_in_force: TimeInForce,
-    pub price: f64,
-    pub qty: f64,
-    pub executed_qty: f64,
-    pub cum_qty: f64,
-    pub update_time: i64,
+    #[serde(deserialize_with = "from_str_to_status")]
+    pub status: Status,
+    pub qty: String,
+    pub fill_qty: String,
+    #[serde(default)]
+    pub fill_avg_price: Option<String>,
+    #[serde(default)]
+    pub price: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct CancelAllResponse {
-    pub canceled: Vec<String>,
+impl OrderDetail {
+    pub fn updated_at_ns(&self) -> Option<i64> {
+        self.updated_at
+            .as_ref()
+            .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+            .and_then(|dt| dt.timestamp_nanos_opt())
+    }
 }

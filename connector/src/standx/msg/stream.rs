@@ -4,41 +4,24 @@ use serde::Deserialize;
 use super::{from_str_to_ord_type, from_str_to_side, from_str_to_status, from_str_to_tif};
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+pub struct Frame {
+    pub channel: String,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
 pub enum StreamEvent {
-    #[serde(rename = "depth")]
-    Depth(Depth),
-    #[serde(rename = "trade")]
-    Trade(Trade),
-    #[serde(rename = "order_update")]
-    OrderUpdate(OrderUpdate),
-    #[serde(other)]
+    Order(OrderUpdate),
     Unknown,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct Depth {
-    pub symbol: String,
-    pub bids: Vec<[f64; 2]>,
-    pub asks: Vec<[f64; 2]>,
-    #[serde(default)]
-    pub ts: i64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct Trade {
-    pub symbol: String,
-    pub price: f64,
-    pub qty: f64,
-    #[serde(deserialize_with = "from_str_to_side")]
-    pub side: Side,
-    #[serde(default)]
-    pub ts: i64,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct OrderUpdate {
-    pub client_order_id: String,
+    #[serde(default)]
+    pub cl_ord_id: Option<String>,
     pub symbol: String,
     #[serde(deserialize_with = "from_str_to_status")]
     pub status: Status,
@@ -48,14 +31,32 @@ pub struct OrderUpdate {
     pub order_type: OrdType,
     #[serde(deserialize_with = "from_str_to_tif")]
     pub time_in_force: TimeInForce,
+    pub qty: String,
+    pub fill_qty: String,
     #[serde(default)]
-    pub leaves_qty: f64,
+    pub fill_avg_price: Option<String>,
     #[serde(default)]
-    pub filled_qty: f64,
+    pub price: Option<String>,
     #[serde(default)]
-    pub price: f64,
-    #[serde(default)]
-    pub last_filled_price: f64,
-    #[serde(default)]
-    pub ts: i64,
+    pub updated_at: Option<String>,
+}
+
+impl OrderUpdate {
+    pub fn updated_at_ns(&self) -> Option<i64> {
+        self.updated_at
+            .as_ref()
+            .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+            .and_then(|dt| dt.timestamp_nanos_opt())
+    }
+}
+
+impl Frame {
+    pub fn into_event(self) -> StreamEvent {
+        match self.channel.as_str() {
+            "order" => serde_json::from_value::<OrderUpdate>(self.data)
+                .map(StreamEvent::Order)
+                .unwrap_or(StreamEvent::Unknown),
+            _ => StreamEvent::Unknown,
+        }
+    }
 }

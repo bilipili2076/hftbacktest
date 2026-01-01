@@ -1,4 +1,4 @@
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast::Receiver;
 use tokio_tungstenite::connect_async;
 use tracing::{debug, error, info};
@@ -6,7 +6,10 @@ use tracing::{debug, error, info};
 use crate::{
     connector::{GetOrders, PublishEvent},
     standx::{
-        StandxError, msg::stream::StreamEvent, ordermanager::SharedOrderManager, rest::StandxClient,
+        StandxError,
+        msg::stream::{Frame, StreamEvent},
+        ordermanager::SharedOrderManager,
+        rest::StandxClient,
     },
 };
 
@@ -32,24 +35,34 @@ impl UserDataStream {
         }
     }
 
-    async fn ws_url(&self) -> Result<String, StandxError> {
-        let token = self.client.create_private_token().await?;
-        Ok(format!(
-            "{}/perps/private?token={token}",
-            self.client.api_url()
-        ))
-    }
-
     pub async fn connect(&mut self) -> Result<(), StandxError> {
-        let url = self.ws_url().await?;
+        let url = self.client.market_ws_url().to_string();
         let (mut ws, _) = connect_async(url).await?;
-        info!("connected standx private stream");
+        info!("connected standx market stream with auth");
+
+        let auth = serde_json::json!({
+            "auth": {"token": self.client.jwt_token()},
+            "streams": [{"channel": "order"}],
+        });
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            auth.to_string(),
+        ))
+        .await?;
+
+        let subscribe = serde_json::json!({
+            "subscribe": {"channel": "order"}
+        });
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            subscribe.to_string(),
+        ))
+        .await?;
 
         while let Some(msg) = ws.next().await {
             let msg = msg?;
             if msg.is_text() {
-                match serde_json::from_str::<StreamEvent>(&msg.to_text()?) {
-                    Ok(StreamEvent::OrderUpdate(update)) => {
+                match serde_json::from_str::<Frame>(&msg.to_text()?).map(|frame| frame.into_event())
+                {
+                    Ok(StreamEvent::Order(update)) => {
                         match self.order_manager.lock().unwrap().update_from_ws(&update) {
                             Ok(Some(order)) => {
                                 self.ev_tx
@@ -77,9 +90,7 @@ impl UserDataStream {
                             }
                         }
                     }
-                    Ok(StreamEvent::Depth(_))
-                    | Ok(StreamEvent::Trade(_))
-                    | Ok(StreamEvent::Unknown) => {}
+                    Ok(StreamEvent::Unknown) => {}
                     Err(error) => {
                         error!(?error, "failed to parse standx private stream message");
                     }

@@ -8,7 +8,7 @@ use crate::{
     connector::GetOrders,
     standx::{
         StandxError,
-        msg::{rest::OrderResponse, stream::OrderUpdate},
+        msg::{rest::OrderDetail, stream::OrderUpdate},
     },
     utils::{RefSymbolOrderId, SymbolOrderId, generate_rand_string},
 };
@@ -41,25 +41,43 @@ impl OrderManager {
     }
 
     pub fn update_from_ws(&mut self, resp: &OrderUpdate) -> Result<Option<Order>, StandxError> {
-        if !resp.client_order_id.starts_with(&self.prefix) {
+        let cl_ord_id = resp.cl_ord_id.as_ref().ok_or(StandxError::OrderNotFound)?;
+        if !cl_ord_id.starts_with(&self.prefix) {
             return Err(StandxError::PrefixUnmatched);
         }
         let order_ext = self
             .orders
-            .get_mut(&resp.client_order_id)
+            .get_mut(cl_ord_id)
             .ok_or(StandxError::OrderNotFound)?;
 
         let already_removed = order_ext.removed_by_ws || order_ext.removed_by_rest;
-        if resp.ts * 1_000_000 >= order_ext.order.exch_timestamp {
-            order_ext.order.qty = resp.leaves_qty + resp.filled_qty;
-            order_ext.order.leaves_qty = resp.leaves_qty;
+        if resp.updated_at_ns().unwrap_or_default() >= order_ext.order.exch_timestamp {
+            let qty = resp.qty.parse::<f64>().unwrap_or(order_ext.order.qty);
+            let fill_qty = resp
+                .fill_qty
+                .parse::<f64>()
+                .unwrap_or(order_ext.order.exec_qty);
+            let price = resp
+                .price
+                .as_ref()
+                .and_then(|p| p.parse::<f64>().ok())
+                .unwrap_or(order_ext.order.price_tick as f64 * order_ext.order.tick_size);
+            let fill_price = resp
+                .fill_avg_price
+                .as_ref()
+                .and_then(|p| p.parse::<f64>().ok())
+                .unwrap_or(order_ext.order.exec_price_tick as f64 * order_ext.order.tick_size);
+
+            order_ext.order.qty = qty;
+            order_ext.order.exec_qty = fill_qty;
+            order_ext.order.leaves_qty = (qty - fill_qty).max(0.0);
+            order_ext.order.price_tick = (price / order_ext.order.tick_size).round() as i64;
             order_ext.order.side = resp.side;
             order_ext.order.time_in_force = resp.time_in_force;
-            order_ext.order.exch_timestamp = resp.ts * 1_000_000;
+            order_ext.order.exch_timestamp = resp.updated_at_ns().unwrap_or_default();
             order_ext.order.status = resp.status;
             order_ext.order.exec_price_tick =
-                (resp.last_filled_price / order_ext.order.tick_size).round() as i64;
-            order_ext.order.exec_qty = resp.filled_qty;
+                (fill_price / order_ext.order.tick_size).round() as i64;
             order_ext.order.order_type = resp.order_type;
         }
 
@@ -81,7 +99,7 @@ impl OrderManager {
             }
 
             if order_ext.removed_by_ws && order_ext.removed_by_rest {
-                self.orders.remove(&resp.client_order_id).unwrap();
+                self.orders.remove(cl_ord_id).unwrap();
             }
         }
 
@@ -137,21 +155,40 @@ impl OrderManager {
     pub fn update_from_rest(
         &mut self,
         client_order_id: &ClientOrderId,
-        resp: &OrderResponse,
+        resp: &OrderDetail,
     ) -> Option<Order> {
         let order_ext = self.orders.get_mut(client_order_id)?;
 
         let already_removed = order_ext.removed_by_ws || order_ext.removed_by_rest;
-        if resp.update_time * 1_000_000 >= order_ext.order.exch_timestamp {
-            order_ext.order.qty = resp.qty;
-            order_ext.order.leaves_qty = resp.qty - resp.cum_qty;
+        if resp.updated_at_ns().unwrap_or_default() >= order_ext.order.exch_timestamp {
+            let qty = resp.qty.parse::<f64>().unwrap_or(order_ext.order.qty);
+            let fill_qty = resp
+                .fill_qty
+                .parse::<f64>()
+                .unwrap_or(order_ext.order.exec_qty);
+            let price = resp
+                .price
+                .as_ref()
+                .and_then(|p| p.parse::<f64>().ok())
+                .unwrap_or(order_ext.order.price_tick as f64 * order_ext.order.tick_size);
+            let fill_price = resp
+                .fill_avg_price
+                .as_ref()
+                .and_then(|p| p.parse::<f64>().ok())
+                .unwrap_or(order_ext.order.exec_price_tick as f64 * order_ext.order.tick_size);
+
+            order_ext.order.qty = qty;
+            order_ext.order.leaves_qty = (qty - fill_qty).max(0.0);
             order_ext.order.side = resp.side;
             order_ext.order.time_in_force = resp.time_in_force;
-            order_ext.order.exch_timestamp = resp.update_time * 1_000_000;
+            order_ext.order.exch_timestamp = resp.updated_at_ns().unwrap_or_default();
             order_ext.order.status = resp.status;
-            order_ext.order.exec_qty = resp.executed_qty;
+            order_ext.order.exec_qty = fill_qty;
             order_ext.order.order_type = resp.order_type;
             order_ext.order.req = Status::None;
+            order_ext.order.price_tick = (price / order_ext.order.tick_size).round() as i64;
+            order_ext.order.exec_price_tick =
+                (fill_price / order_ext.order.tick_size).round() as i64;
         }
 
         let result = if already_removed {

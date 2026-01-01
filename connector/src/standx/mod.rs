@@ -51,10 +51,10 @@ pub enum StandxError {
     Config(#[from] toml::de::Error),
     #[error("InvalidResponse: {0}")]
     InvalidResponse(String),
-    #[error("SigningError")]
-    SigningError(#[from] hmac::digest::InvalidLength),
     #[error("SerdeError: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("InvalidSigningKey")]
+    InvalidSigningKey,
 }
 
 impl From<StandxError> for Value {
@@ -65,16 +65,32 @@ impl From<StandxError> for Value {
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
-    #[serde(default)]
+    #[serde(default = "default_market_ws_url")]
     pub stream_url: String,
-    #[serde(default)]
+    #[serde(default = "default_order_ws_url")]
+    pub order_stream_url: String,
+    #[serde(default = "default_api_url")]
     pub api_url: String,
     #[serde(default)]
     pub order_prefix: String,
     #[serde(default)]
-    pub api_key: String,
+    pub jwt_token: String,
     #[serde(default)]
-    pub secret: String,
+    pub signing_key: String,
+    #[serde(default)]
+    pub session_id: String,
+}
+
+fn default_market_ws_url() -> String {
+    "wss://perps.standx.com/ws-stream/v1".to_string()
+}
+
+fn default_order_ws_url() -> String {
+    "wss://perps.standx.com/ws-api/v1".to_string()
+}
+
+fn default_api_url() -> String {
+    "https://perps.standx.com".to_string()
 }
 
 type SharedSymbolSet = Arc<Mutex<HashSet<String>>>;
@@ -162,7 +178,19 @@ impl ConnectorBuilder for Standx {
         let config: Config = toml::from_str(config)?;
 
         let order_manager = Arc::new(Mutex::new(OrderManager::new(&config.order_prefix)));
-        let client = StandxClient::new(&config.api_url, &config.api_key, &config.secret);
+        let session_id = if config.session_id.is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            config.session_id.clone()
+        };
+        let client = StandxClient::new(
+            &config.api_url,
+            &config.stream_url,
+            &config.order_stream_url,
+            &config.jwt_token,
+            &config.signing_key,
+            &session_id,
+        )?;
         let (symbol_tx, _) = broadcast::channel(500);
 
         Ok(Standx {
@@ -190,7 +218,7 @@ impl Connector for Standx {
 
     fn run(&mut self, ev_tx: UnboundedSender<PublishEvent>) {
         self.connect_market_data_stream(ev_tx.clone());
-        if !self.config.api_key.is_empty() && !self.config.secret.is_empty() {
+        if !self.config.jwt_token.is_empty() {
             self.connect_user_data_stream(ev_tx.clone());
         }
     }
@@ -207,12 +235,18 @@ impl Connector for Standx {
 
             match client_order_id {
                 Some(client_order_id) => {
+                    let price = if order.order_type == hftbacktest::types::OrdType::Market {
+                        None
+                    } else {
+                        Some(order.price_tick as f64 * order.tick_size)
+                    };
+
                     let result = client
-                        .submit_order(
+                        .new_order(
                             &client_order_id,
                             &symbol,
                             order.side,
-                            order.price_tick as f64 * order.tick_size,
+                            price,
                             order.qty,
                             order.order_type,
                             order.time_in_force,

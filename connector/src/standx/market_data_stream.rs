@@ -5,7 +5,7 @@ use tracing::{error, info};
 
 use crate::{
     connector::PublishEvent,
-    standx::{StandxError, msg::stream::StreamEvent},
+    standx::{StandxError, msg::stream::Frame},
 };
 
 pub struct MarketDataStream {
@@ -58,18 +58,8 @@ impl MarketDataStream {
         while let Some(msg) = ws.next().await {
             let msg = msg?;
             if msg.is_text() {
-                match serde_json::from_str::<StreamEvent>(&msg.to_text()?) {
-                    Ok(StreamEvent::OrderUpdate(_)) => {
-                        // public stream shouldn't deliver order updates
-                    }
-                    Ok(StreamEvent::Depth(_)) | Ok(StreamEvent::Trade(_)) => {
-                        // Placeholder: StandX depth/trade events are acknowledged but not yet
-                        // mapped into simulator feed events.
-                    }
-                    Ok(StreamEvent::Unknown) => {}
-                    Err(error) => {
-                        error!(?error, "failed to parse standx market data message");
-                    }
+                if serde_json::from_str::<Frame>(&msg.to_text()?).is_err() {
+                    error!("failed to parse standx market data message");
                 }
             }
             // Refresh subscriptions when new symbols arrive.

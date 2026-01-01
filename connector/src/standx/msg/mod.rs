@@ -1,8 +1,6 @@
 use hftbacktest::types::{OrdType, Side, Status, TimeInForce};
 use serde::{
-    Deserialize,
-    Deserializer,
-    Serializer,
+    Deserialize, Deserializer, Serializer,
     de::{Error, Unexpected},
 };
 
@@ -14,9 +12,9 @@ where
     S: Serializer,
 {
     serializer.serialize_str(match side {
-        Side::Buy => "BUY",
-        Side::Sell => "SELL",
-        _ => "NONE",
+        Side::Buy => "buy",
+        Side::Sell => "sell",
+        _ => "none",
     })
 }
 
@@ -25,9 +23,9 @@ where
     S: Serializer,
 {
     serializer.serialize_str(match ord_type {
-        OrdType::Limit => "LIMIT",
-        OrdType::Market => "MARKET",
-        _ => "UNSUPPORTED",
+        OrdType::Limit => "limit",
+        OrdType::Market => "market",
+        _ => "unsupported",
     })
 }
 
@@ -36,11 +34,12 @@ where
     S: Serializer,
 {
     serializer.serialize_str(match tif {
-        TimeInForce::GTC => "GTC",
-        TimeInForce::GTX => "GTX",
-        TimeInForce::FOK => "FOK",
-        TimeInForce::IOC => "IOC",
-        _ => "UNSUPPORTED",
+        TimeInForce::GTC => "gtc",
+        TimeInForce::IOC => "ioc",
+        // StandX uses `alo` for post-only; map to GTX internally
+        TimeInForce::GTX => "alo",
+        TimeInForce::FOK => "fok",
+        _ => "unsupported",
     })
 }
 
@@ -49,10 +48,10 @@ where
     D: Deserializer<'de>,
 {
     let s: &str = Deserialize::deserialize(deserializer)?;
-    match s.to_ascii_uppercase().as_str() {
-        "BUY" => Ok(Side::Buy),
-        "SELL" => Ok(Side::Sell),
-        _ => Err(Error::invalid_value(Unexpected::Other(s), &"BUY or SELL")),
+    match s.to_ascii_lowercase().as_str() {
+        "buy" => Ok(Side::Buy),
+        "sell" => Ok(Side::Sell),
+        _ => Err(Error::invalid_value(Unexpected::Other(s), &"buy or sell")),
     }
 }
 
@@ -61,15 +60,16 @@ where
     D: Deserializer<'de>,
 {
     let s: &str = Deserialize::deserialize(deserializer)?;
-    match s.to_ascii_uppercase().as_str() {
-        "NEW" => Ok(Status::New),
-        "PARTIALLY_FILLED" => Ok(Status::PartiallyFilled),
-        "FILLED" => Ok(Status::Filled),
-        "CANCELED" | "CANCELLED" => Ok(Status::Canceled),
-        "EXPIRED" => Ok(Status::Expired),
-        _ => Err(Error::invalid_value(
-            Unexpected::Other(s),
-            &"NEW,PARTIALLY_FILLED,FILLED,CANCELED,EXPIRED",
+    match s.to_ascii_lowercase().as_str() {
+        "new" | "open" => Ok(Status::New),
+        "partially_filled" | "partial" => Ok(Status::PartiallyFilled),
+        "filled" => Ok(Status::Filled),
+        "canceled" | "cancelled" => Ok(Status::Canceled),
+        "rejected" => Ok(Status::Rejected),
+        "untriggered" | "expired" => Ok(Status::Expired),
+        other => Err(Error::invalid_value(
+            Unexpected::Other(other),
+            &"open,filled,canceled,rejected,untriggered",
         )),
     }
 }
@@ -79,10 +79,13 @@ where
     D: Deserializer<'de>,
 {
     let s: &str = Deserialize::deserialize(deserializer)?;
-    match s.to_ascii_uppercase().as_str() {
-        "LIMIT" => Ok(OrdType::Limit),
-        "MARKET" => Ok(OrdType::Market),
-        _ => Err(Error::invalid_value(Unexpected::Other(s), &"LIMIT or MARKET")),
+    match s.to_ascii_lowercase().as_str() {
+        "limit" => Ok(OrdType::Limit),
+        "market" => Ok(OrdType::Market),
+        _ => Err(Error::invalid_value(
+            Unexpected::Other(s),
+            &"limit or market",
+        )),
     }
 }
 
@@ -91,14 +94,14 @@ where
     D: Deserializer<'de>,
 {
     let s: &str = Deserialize::deserialize(deserializer)?;
-    match s.to_ascii_uppercase().as_str() {
-        "GTC" => Ok(TimeInForce::GTC),
-        "GTX" => Ok(TimeInForce::GTX),
-        "IOC" => Ok(TimeInForce::IOC),
-        "FOK" => Ok(TimeInForce::FOK),
-        _ => Err(Error::invalid_value(
-            Unexpected::Other(s),
-            &"GTC,GTX,IOC,FOK",
+    match s.to_ascii_lowercase().as_str() {
+        "gtc" => Ok(TimeInForce::GTC),
+        "alo" => Ok(TimeInForce::GTX),
+        "ioc" => Ok(TimeInForce::IOC),
+        "fok" => Ok(TimeInForce::FOK),
+        other => Err(Error::invalid_value(
+            Unexpected::Other(other),
+            &"gtc,alo,ioc,fok",
         )),
     }
 }

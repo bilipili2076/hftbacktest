@@ -14,27 +14,22 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict
 
 import requests
 
-API_URL = os.environ.get("STANDX_API_URL", "https://api.standx.com").rstrip("/")
-NUM_TICKERS = int(os.environ.get("STANDX_NUM_TICKERS", "50"))
+API_URL = os.environ.get("STANDX_API_URL", "https://perps.standx.com").rstrip("/")
+SYMBOLS = [
+    s.strip()
+    for s in os.environ.get("STANDX_SYMBOLS", "BTC-USD").split(",")
+    if s.strip()
+]
 
 
 def _fetch(path: str) -> Any:
     resp = requests.get(f"{API_URL}{path}")
     resp.raise_for_status()
     return resp.json()
-
-
-def _index_by_symbol(markets: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    indexed: Dict[str, Dict[str, Any]] = {}
-    for market in markets:
-        symbol = market.get("symbol") or market.get("id")
-        if isinstance(symbol, str):
-            indexed[symbol] = market
-    return indexed
 
 
 def _extract_market_info(symbol: str, market: Dict[str, Any]) -> Dict[str, Any]:
@@ -89,41 +84,34 @@ def _extract_ticker_info(ticker: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in info.items() if v is not None}
 
 
-def _is_alt_symbol(symbol: str) -> bool:
-    upper = symbol.upper()
-    return not (upper.startswith("BTC") or upper.startswith("ETH"))
-
-
 def main() -> None:
-    tickers: List[Dict[str, Any]] = _fetch("/perps/public/tickers")
-    markets: List[Dict[str, Any]] = _fetch("/perps/public/markets")
-
-    markets_by_symbol = _index_by_symbol(markets)
-
     merged: Dict[str, Dict[str, Any]] = {}
-    for ticker in tickers:
-        info = _extract_ticker_info(ticker)
-        symbol = info.get("symbol")
-        if not symbol:
+
+    for symbol in SYMBOLS:
+        try:
+            ticker = _fetch(f"/api/query_symbol_market?symbol={symbol}")
+            info = _extract_ticker_info(ticker)
+            merged[symbol] = info
+        except requests.HTTPError as exc:  # pragma: no cover - informational
+            print(f"failed to fetch market ticker for {symbol}: {exc}")
             continue
-        merged[symbol] = info
 
-    for symbol, market in markets_by_symbol.items():
-        entry = merged.setdefault(symbol, {"symbol": symbol})
-        entry.update({k: v for k, v in _extract_market_info(symbol, market).items() if k != "symbol"})
+        try:
+            market_info = _fetch(f"/api/query_symbol_info?symbol={symbol}")
+            if isinstance(market_info, list) and market_info:
+                merged[symbol].update(
+                    {
+                        k: v
+                        for k, v in _extract_market_info(symbol, market_info[0]).items()
+                        if k != "symbol"
+                    }
+                )
+        except requests.HTTPError as exc:  # pragma: no cover - informational
+            print(f"failed to fetch symbol info for {symbol}: {exc}")
 
-    sorted_tickers = sorted(
-        merged.items(),
-        key=lambda item: float(item[1].get("quote_volume", 0) or 0.0),
-        reverse=True,
-    )
-
-    alts = [(symbol, info) for symbol, info in sorted_tickers if _is_alt_symbol(symbol)]
-    top = dict(alts[:NUM_TICKERS])
-
-    print(json.dumps(top, indent=2, ensure_ascii=False))
+    print(json.dumps(merged, indent=2, ensure_ascii=False))
     with open("standx_tickers.json", "w", encoding="utf-8") as f:
-        json.dump(top, f, ensure_ascii=False)
+        json.dump(merged, f, ensure_ascii=False)
 
 
 if __name__ == "__main__":
