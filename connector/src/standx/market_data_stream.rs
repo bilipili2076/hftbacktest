@@ -227,11 +227,14 @@ impl MarketDataStream {
         {
             let now = Utc::now().timestamp_nanos_opt().unwrap_or_default();
             let qty = 0.0;
+
+            self.ev_tx.send(PublishEvent::BatchStart(TO_ALL)).unwrap();
+
             self.ev_tx
                 .send(PublishEvent::LiveEvent(LiveEvent::Feed {
-                    symbol,
+                    symbol: symbol.clone(),
                     event: Event {
-                        ev: LOCAL_BBO_EVENT,
+                        ev: LOCAL_BID_DEPTH_BBO_EVENT,
                         exch_ts: now,
                         local_ts: now,
                         order_id: 0,
@@ -242,6 +245,24 @@ impl MarketDataStream {
                     },
                 }))
                 .unwrap();
+
+            self.ev_tx
+                .send(PublishEvent::LiveEvent(LiveEvent::Feed {
+                    symbol,
+                    event: Event {
+                        ev: LOCAL_ASK_DEPTH_BBO_EVENT,
+                        exch_ts: now,
+                        local_ts: now,
+                        order_id: 0,
+                        px: mid,
+                        qty,
+                        ival: 0,
+                        fval: 0.0,
+                    },
+                }))
+                .unwrap();
+
+            self.ev_tx.send(PublishEvent::BatchEnd(TO_ALL)).unwrap();
         }
     }
 
