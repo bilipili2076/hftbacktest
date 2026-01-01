@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use base64::Engine;
-use ed25519_dalek::{SigningKey, pkcs8::DecodePrivateKey};
+use ed25519_dalek::{Signer, SigningKey, pkcs8::DecodePrivateKey};
 use hftbacktest::types::{OrdType, Side, TimeInForce};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use tokio::time::Duration;

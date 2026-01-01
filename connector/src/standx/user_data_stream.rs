@@ -45,7 +45,7 @@ impl UserDataStream {
             "streams": [{"channel": "order"}],
         });
         ws.send(tokio_tungstenite::tungstenite::Message::Text(
-            auth.to_string(),
+            auth.to_string().into(),
         ))
         .await?;
 
@@ -53,7 +53,7 @@ impl UserDataStream {
             "subscribe": {"channel": "order"}
         });
         ws.send(tokio_tungstenite::tungstenite::Message::Text(
-            subscribe.to_string(),
+            subscribe.to_string().into(),
         ))
         .await?;
 
