@@ -17,6 +17,8 @@ pub struct Frame {
 #[serde(untagged)]
 pub enum StreamEvent {
     Order(OrderUpdate),
+    Position(PositionUpdate),
+    Balance(BalanceUpdate),
     Unknown,
 }
 
@@ -43,6 +45,26 @@ pub struct OrderUpdate {
     pub updated_at: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct PositionUpdate {
+    pub symbol: String,
+    pub qty: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct BalanceUpdate {
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub total: Option<String>,
+    #[serde(default)]
+    pub free: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
 impl OrderUpdate {
     pub fn updated_at_ns(&self) -> Option<i64> {
         self.updated_at
@@ -57,6 +79,12 @@ impl Frame {
         match self.channel.as_deref() {
             Some("order") => serde_json::from_value::<OrderUpdate>(self.data)
                 .map(StreamEvent::Order)
+                .unwrap_or(StreamEvent::Unknown),
+            Some("position") => serde_json::from_value::<PositionUpdate>(self.data)
+                .map(StreamEvent::Position)
+                .unwrap_or(StreamEvent::Unknown),
+            Some("balance") => serde_json::from_value::<BalanceUpdate>(self.data)
+                .map(StreamEvent::Balance)
                 .unwrap_or(StreamEvent::Unknown),
             _ => StreamEvent::Unknown,
         }

@@ -26,6 +26,16 @@ struct DepthBook {
 }
 
 #[derive(Debug, Deserialize)]
+struct Price {
+    #[serde(default)]
+    spread: Option<[String; 2]>,
+    #[serde(default)]
+    mid_price: Option<String>,
+    #[serde(default)]
+    last_price: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct PublicTrade {
     price: String,
     qty: String,
@@ -59,7 +69,7 @@ impl MarketDataStream {
         >,
     ) -> Result<(), StandxError> {
         while let Ok(symbol) = self.symbol_rx.try_recv() {
-            for channel in ["depth_book", "public_trade"] {
+            for channel in ["depth_book", "public_trade", "price"] {
                 let msg = serde_json::json!({
                     "subscribe": {"channel": channel, "symbol": symbol.clone()},
                 });
@@ -160,6 +170,81 @@ impl MarketDataStream {
         }
     }
 
+    fn process_price(&mut self, symbol: String, price: Price) {
+        if let Some(spread) = price.spread {
+            if let Ok((mut bids, mut asks)) = parse_depth(
+                vec![(spread[0].clone(), "1".to_string())],
+                vec![(spread[1].clone(), "1".to_string())],
+            ) {
+                let now = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+                self.ev_tx.send(PublishEvent::BatchStart(TO_ALL)).unwrap();
+
+                if let Some((px, qty)) = bids.pop() {
+                    self.ev_tx
+                        .send(PublishEvent::LiveEvent(LiveEvent::Feed {
+                            symbol: symbol.clone(),
+                            event: Event {
+                                ev: LOCAL_BID_DEPTH_EVENT,
+                                exch_ts: now,
+                                local_ts: now,
+                                order_id: 0,
+                                px,
+                                qty,
+                                ival: 0,
+                                fval: 0.0,
+                            },
+                        }))
+                        .unwrap();
+                }
+
+                if let Some((px, qty)) = asks.pop() {
+                    self.ev_tx
+                        .send(PublishEvent::LiveEvent(LiveEvent::Feed {
+                            symbol: symbol.clone(),
+                            event: Event {
+                                ev: LOCAL_ASK_DEPTH_EVENT,
+                                exch_ts: now,
+                                local_ts: now,
+                                order_id: 0,
+                                px,
+                                qty,
+                                ival: 0,
+                                fval: 0.0,
+                            },
+                        }))
+                        .unwrap();
+                }
+
+                self.ev_tx.send(PublishEvent::BatchEnd(TO_ALL)).unwrap();
+                return;
+            }
+        }
+
+        if let Some(mid) = price
+            .mid_price
+            .or(price.last_price)
+            .and_then(|v| v.parse::<f64>().ok())
+        {
+            let now = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+            let qty = 0.0;
+            self.ev_tx
+                .send(PublishEvent::LiveEvent(LiveEvent::Feed {
+                    symbol,
+                    event: Event {
+                        ev: LOCAL_BBO_EVENT,
+                        exch_ts: now,
+                        local_ts: now,
+                        order_id: 0,
+                        px: mid,
+                        qty,
+                        ival: 0,
+                        fval: 0.0,
+                    },
+                }))
+                .unwrap();
+        }
+    }
+
     pub async fn connect(&mut self) -> Result<(), StandxError> {
         let url = self.ws_url.clone();
         let (mut ws, _) = connect_async(url).await?;
@@ -180,6 +265,11 @@ impl MarketDataStream {
                         "public_trade" => {
                             if let Ok(trade) = serde_json::from_value::<PublicTrade>(frame.data) {
                                 self.process_public_trade(frame.symbol, trade);
+                            }
+                        }
+                        "price" => {
+                            if let Ok(price) = serde_json::from_value::<Price>(frame.data) {
+                                self.process_price(frame.symbol, price);
                             }
                         }
                         _ => {}

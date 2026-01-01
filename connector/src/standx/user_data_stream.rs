@@ -1,3 +1,4 @@
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast::Receiver;
 use tokio_tungstenite::connect_async;
@@ -42,20 +43,26 @@ impl UserDataStream {
 
         let auth = serde_json::json!({
             "auth": {"token": self.client.jwt_token()},
-            "streams": [{"channel": "order"}],
+            "streams": [
+                {"channel": "order"},
+                {"channel": "position"},
+                {"channel": "balance"},
+            ],
         });
         ws.send(tokio_tungstenite::tungstenite::Message::Text(
             auth.to_string().into(),
         ))
         .await?;
 
-        let subscribe = serde_json::json!({
-            "subscribe": {"channel": "order"}
-        });
-        ws.send(tokio_tungstenite::tungstenite::Message::Text(
-            subscribe.to_string().into(),
-        ))
-        .await?;
+        for channel in ["order", "position", "balance"] {
+            let subscribe = serde_json::json!({
+                "subscribe": {"channel": channel}
+            });
+            ws.send(tokio_tungstenite::tungstenite::Message::Text(
+                subscribe.to_string().into(),
+            ))
+            .await?;
+        }
 
         while let Some(msg) = ws.next().await {
             let msg = msg?;
@@ -90,6 +97,29 @@ impl UserDataStream {
                             }
                         }
                     }
+                    Ok(StreamEvent::Position(update)) => {
+                        if let Ok(qty) = update.qty.parse::<f64>() {
+                            let exch_ts = update
+                                .updated_at
+                                .as_ref()
+                                .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                                .and_then(|dt| dt.timestamp_nanos_opt())
+                                .unwrap_or_else(|| {
+                                    chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+                                });
+
+                            self.ev_tx
+                                .send(PublishEvent::LiveEvent(
+                                    hftbacktest::types::LiveEvent::Position {
+                                        symbol: update.symbol.clone(),
+                                        qty,
+                                        exch_ts,
+                                    },
+                                ))
+                                .unwrap();
+                        }
+                    }
+                    Ok(StreamEvent::Balance(_)) => {}
                     Ok(StreamEvent::Unknown) => {}
                     Err(error) => {
                         error!(?error, "failed to parse standx private stream message");
