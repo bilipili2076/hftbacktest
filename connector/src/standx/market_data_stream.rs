@@ -4,7 +4,7 @@ use hftbacktest::{live::ipc::TO_ALL, prelude::*};
 use serde::Deserialize;
 use tokio::sync::broadcast::Receiver;
 use tokio_tungstenite::connect_async;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
     connector::PublishEvent,
@@ -277,6 +277,12 @@ impl MarketDataStream {
 
         while let Some(msg) = ws.next().await {
             let msg = msg?;
+            if msg.is_text() {
+                let txt = msg.to_text()?;
+                debug!(raw = %txt, "standx ws recv");
+            } else {
+                debug!(?msg, "standx ws recv non-text");
+            }
             if msg.is_text() {
                 match serde_json::from_str::<Frame>(&msg.to_text()?) {
                     Ok(frame) => match frame.channel.as_str() {
