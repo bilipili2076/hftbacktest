@@ -14,6 +14,8 @@ Supported exchanges include:
   - The symbol should be in lowercase.
 * Bybit Futures (Under development)
   - The symbol should be in uppercase.
+* StandX perpetual DEX (scaffolding)
+  - Placeholder connector that keeps local order state until full API wiring is available.
 
 ## Getting Started
 
