@@ -117,6 +117,7 @@ impl MarketDataStream {
         }
 
         if !self.snapshotted.contains(&symbol) {
+            info!(?symbol, "standx depth snapshot bootstrap start");
             self.snapshotted.insert(symbol.clone());
             let mut me = self.clone_for_snapshot();
             tokio::spawn(async move {
@@ -140,7 +141,14 @@ impl MarketDataStream {
     }
 
     async fn fetch_and_publish_snapshot(&mut self, symbol: &str) -> Result<(), StandxError> {
+        info!(symbol, "standx depth snapshot request");
         let depth: DepthBook = self.client.query_depth_book(symbol).await?.into();
+        info!(
+            symbol,
+            bids = depth.bids.len(),
+            asks = depth.asks.len(),
+            "standx depth snapshot received"
+        );
         self.process_depth(symbol.to_string(), depth);
         Ok(())
     }

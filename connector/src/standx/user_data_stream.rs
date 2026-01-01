@@ -163,7 +163,7 @@ impl UserDataStream {
 
                         match serde_json::from_str::<Frame>(&txt).map(|frame| frame.into_event()) {
                             Ok(StreamEvent::Order(update)) => {
-                                debug!("standx order update", ?update);
+                                debug!(?update, "standx order update");
                                 match self.order_manager.lock().unwrap().update_from_ws(&update) {
                                     Ok(Some(order)) => {
                                         self.ev_tx
@@ -192,7 +192,7 @@ impl UserDataStream {
                                 }
                             }
                             Ok(StreamEvent::Position(update)) => {
-                                debug!("standx position update", ?update);
+                                debug!(?update, "standx position update");
                                 if let Ok(qty) = update.qty.parse::<f64>() {
                                     let exch_ts = update
                                         .updated_at
@@ -215,7 +215,7 @@ impl UserDataStream {
                                 }
                             }
                             Ok(StreamEvent::Balance(update)) => {
-                                debug!("standx balance update", ?update);
+                                debug!(?update, "standx balance update");
                             }
                             Ok(StreamEvent::Unknown) => {}
                             Err(error) => {
