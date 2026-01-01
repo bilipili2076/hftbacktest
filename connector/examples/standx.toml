@@ -1,0 +1,23 @@
+# StandX perpetual DEX connector configuration
+# Based on the documented JWT + ed25519 body-signing flow:
+#   1) Obtain a JWT via wallet signature (Authorization: Bearer <token>).
+#   2) Use your temporary ed25519 private key to sign order/cancel payloads.
+# Only trades need signatures; read-only endpoints use JWT only.
+
+# API endpoints (defaults match docs)
+api_url = "https://perps.standx.com"
+stream_url = "wss://perps.standx.com/ws-stream/v1"
+order_stream_url = "wss://perps.standx.com/ws-api/v1"
+
+# Authentication
+jwt_token = "your-jwt-token"
+
+# Base64/hex/PKCS#8 encoded ed25519 private key generated during prepare-signin
+# Leave blank to skip body-signing (read-only usage only)
+signing_key = ""
+
+# Optional session id (keeps REST and order WS in sync); defaults to a random UUID
+session_id = ""
+
+# Optional client order id prefix
+order_prefix = "standx"
