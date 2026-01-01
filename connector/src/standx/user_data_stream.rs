@@ -49,6 +49,7 @@ impl UserDataStream {
                 {"channel": "balance"},
             ],
         });
+        info!("standx auth request sent");
         ws.send(tokio_tungstenite::tungstenite::Message::Text(
             auth.to_string().into(),
         ))
@@ -58,6 +59,7 @@ impl UserDataStream {
             let subscribe = serde_json::json!({
                 "subscribe": {"channel": channel}
             });
+            info!(channel, "standx private subscribe");
             ws.send(tokio_tungstenite::tungstenite::Message::Text(
                 subscribe.to_string().into(),
             ))
@@ -70,6 +72,7 @@ impl UserDataStream {
                 match serde_json::from_str::<Frame>(&msg.to_text()?).map(|frame| frame.into_event())
                 {
                     Ok(StreamEvent::Order(update)) => {
+                        debug!("standx order update", ?update);
                         match self.order_manager.lock().unwrap().update_from_ws(&update) {
                             Ok(Some(order)) => {
                                 self.ev_tx
@@ -98,6 +101,7 @@ impl UserDataStream {
                         }
                     }
                     Ok(StreamEvent::Position(update)) => {
+                        debug!("standx position update", ?update);
                         if let Ok(qty) = update.qty.parse::<f64>() {
                             let exch_ts = update
                                 .updated_at
@@ -119,7 +123,9 @@ impl UserDataStream {
                                 .unwrap();
                         }
                     }
-                    Ok(StreamEvent::Balance(_)) => {}
+                    Ok(StreamEvent::Balance(update)) => {
+                        debug!("standx balance update", ?update);
+                    }
                     Ok(StreamEvent::Unknown) => {}
                     Err(error) => {
                         error!(?error, "failed to parse standx private stream message");

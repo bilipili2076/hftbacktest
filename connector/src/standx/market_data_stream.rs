@@ -70,6 +70,8 @@ impl MarketDataStream {
     ) -> Result<(), StandxError> {
         while let Ok(symbol) = self.symbol_rx.try_recv() {
             for channel in ["depth_book", "public_trade", "price"] {
+                info!(?symbol, channel, "standx subscribe");
+
                 let msg = serde_json::json!({
                     "subscribe": {"channel": channel, "symbol": symbol.clone()},
                 });
