@@ -22,8 +22,7 @@ use iceoryx2::{
 };
 use tokio::{
     runtime::Builder,
-    select,
-    signal,
+    select, signal,
     sync::{
         Notify,
         mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
@@ -36,6 +35,7 @@ use crate::{
     binancespot::BinanceSpot,
     bybit::Bybit,
     connector::{Connector, ConnectorBuilder, GetOrders, PublishEvent},
+    standx::Standx,
 };
 
 #[cfg(feature = "binancefutures")]
@@ -44,6 +44,8 @@ pub mod binancefutures;
 pub mod binancespot;
 #[cfg(feature = "bybit")]
 pub mod bybit;
+#[cfg(feature = "standx")]
+pub mod standx;
 
 mod connector;
 //mod fuse;
@@ -325,6 +327,7 @@ struct Args {
     /// Connector
     /// * binancefutures: Binance USD-m Futures
     /// * bybit: Bybit Linear Futures
+    /// * standx: StandX perpetual DEX (placeholder)
     connector: String,
 
     /// Connector's configuration file path.
@@ -403,6 +406,15 @@ async fn main() {
             let mut connector = BinanceSpot::build_from(&config)
                 .map_err(|error| {
                     error!(?error, "Couldn't build the Bybit connector.");
+                })
+                .unwrap();
+            connector.run(pub_tx.clone());
+            Box::new(connector)
+        }
+        "standx" => {
+            let mut connector = Standx::build_from(&config)
+                .map_err(|error| {
+                    error!(?error, "Couldn't build the StandX connector.");
                 })
                 .unwrap();
             connector.run(pub_tx.clone());
