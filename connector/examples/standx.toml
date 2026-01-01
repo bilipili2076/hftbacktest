@@ -1,0 +1,7 @@
+# StandX perpetual DEX connector configuration
+# This placeholder connector stores requests locally until full API wiring is available.
+api_url = "https://api.standx.local"
+ws_url = "wss://stream.standx.local"
+api_key = "your-api-key"
+api_secret = "your-api-secret"
+order_prefix = "standx"
