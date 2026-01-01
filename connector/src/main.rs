@@ -220,10 +220,14 @@ fn handle_ev(
     match &ev {
         LiveEvent::Feed { symbol, event } => {
             if event.is(BUY_EVENT | DEPTH_EVENT) {
-                let depth_ = {
-                    match depth.get_mut(symbol) {
-                        Some(d) => d,
-                        None => return vec![],
+                let depth_ = match depth.get_mut(symbol) {
+                    Some(d) => d,
+                    None => {
+                        tracing::warn!(
+                            symbol,
+                            "depth event dropped because instrument not registered"
+                        );
+                        return vec![];
                     }
                 };
                 return depth_
@@ -235,10 +239,14 @@ fn handle_ev(
                     })
                     .collect();
             } else if event.is(SELL_EVENT | DEPTH_EVENT) {
-                let depth_ = {
-                    match depth.get_mut(symbol) {
-                        Some(d) => d,
-                        None => return vec![],
+                let depth_ = match depth.get_mut(symbol) {
+                    Some(d) => d,
+                    None => {
+                        tracing::warn!(
+                            symbol,
+                            "depth event dropped because instrument not registered"
+                        );
+                        return vec![];
                     }
                 };
                 return depth_
