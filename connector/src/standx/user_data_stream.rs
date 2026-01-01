@@ -48,25 +48,17 @@ impl UserDataStream {
         info!("connected standx market stream with auth");
 
         let auth = serde_json::json!({
-            "auth": {"token": self.client.jwt_token()},
-            "streams": [
-                {"channel": "order"},
-                {"channel": "position"},
-                {"channel": "balance"},
-            ],
+            "auth": {
+                "token": self.client.jwt_token(),
+                "streams": [
+                    {"channel": "order"},
+                    {"channel": "position"},
+                    {"channel": "balance"},
+                ],
+            },
         });
         info!("standx auth request sent");
         write.send(Message::Text(auth.to_string().into())).await?;
-
-        for channel in ["order", "position", "balance"] {
-            let subscribe = serde_json::json!({
-                "subscribe": {"channel": channel}
-            });
-            info!(channel, "standx private subscribe");
-            write
-                .send(Message::Text(subscribe.to_string().into()))
-                .await?;
-        }
 
         // bootstrap position snapshot once we are authenticated
         let client = self.client.clone();
@@ -103,6 +95,8 @@ impl UserDataStream {
 
         let mut ping_checker = time::interval(Duration::from_secs(10));
         let mut last_ping = Instant::now();
+        let mut authed = false;
+        let mut subscribed = false;
 
         loop {
             tokio::select! {
@@ -122,6 +116,43 @@ impl UserDataStream {
                 message = read.next() => match message {
                     Some(Ok(Message::Text(txt))) => {
                         debug!(raw = %txt, "standx ws recv");
+
+                        // handle auth ack/err before decoding into channel events
+                        if !authed {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&txt) {
+                                let channel = val.get("channel").and_then(|c| c.as_str());
+                                let code = val
+                                    .get("data")
+                                    .and_then(|d| d.get("code"))
+                                    .or_else(|| val.get("code"))
+                                    .and_then(|c| c.as_i64());
+
+                                if channel == Some("auth") && code == Some(200) {
+                                    authed = true;
+                                    info!("standx private auth ok");
+                                } else if let Some(code) = code {
+                                    error!(code, "standx private auth failed");
+                                }
+                            }
+
+                            if !authed {
+                                continue;
+                            }
+                        }
+
+                        if authed && !subscribed {
+                            for channel in ["order", "position", "balance"] {
+                                let subscribe = serde_json::json!({
+                                    "subscribe": {"channel": channel}
+                                });
+                                info!(channel, "standx private subscribe");
+                                write
+                                    .send(Message::Text(subscribe.to_string().into()))
+                                    .await?;
+                            }
+                            subscribed = true;
+                        }
+
                         match serde_json::from_str::<Frame>(&txt).map(|frame| frame.into_event()) {
                             Ok(StreamEvent::Order(update)) => {
                                 debug!("standx order update", ?update);
