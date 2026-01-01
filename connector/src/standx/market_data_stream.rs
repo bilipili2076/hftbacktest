@@ -1,12 +1,37 @@
+use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
+use hftbacktest::{live::ipc::TO_ALL, prelude::*};
+use serde::Deserialize;
 use tokio::sync::broadcast::Receiver;
 use tokio_tungstenite::connect_async;
 use tracing::{error, info};
 
 use crate::{
     connector::PublishEvent,
-    standx::{StandxError, msg::stream::Frame},
+    standx::StandxError,
+    utils::{parse_depth, parse_px_qty_tup},
 };
+
+#[derive(Debug, Deserialize)]
+struct Frame {
+    channel: String,
+    symbol: String,
+    data: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct DepthBook {
+    bids: Vec<[String; 2]>,
+    asks: Vec<[String; 2]>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PublicTrade {
+    price: String,
+    qty: String,
+    #[serde(default)]
+    time: Option<String>,
+}
 
 pub struct MarketDataStream {
     ws_url: String,
@@ -34,18 +59,105 @@ impl MarketDataStream {
         >,
     ) -> Result<(), StandxError> {
         while let Ok(symbol) = self.symbol_rx.try_recv() {
-            let msg = serde_json::json!({
-                "method": "subscribe",
-                "channels": ["depth", "trade"],
-                "symbols": [symbol],
-            });
-            ws.send(tokio_tungstenite::tungstenite::Message::Text(
-                msg.to_string().into(),
-            ))
-            .await
-            .map_err(StandxError::from)?;
+            for channel in ["depth_book", "public_trade"] {
+                let msg = serde_json::json!({
+                    "subscribe": {"channel": channel, "symbol": symbol.clone()},
+                });
+                ws.send(tokio_tungstenite::tungstenite::Message::Text(
+                    msg.to_string().into(),
+                ))
+                .await
+                .map_err(StandxError::from)?;
+            }
         }
         Ok(())
+    }
+
+    fn process_depth(&mut self, symbol: String, book: DepthBook) {
+        let bids: Vec<(String, String)> = book
+            .bids
+            .into_iter()
+            .map(|entry| (entry[0].clone(), entry[1].clone()))
+            .collect();
+        let asks: Vec<(String, String)> = book
+            .asks
+            .into_iter()
+            .map(|entry| (entry[0].clone(), entry[1].clone()))
+            .collect();
+
+        match parse_depth(bids, asks) {
+            Ok((bids, asks)) => {
+                let now = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+                self.ev_tx.send(PublishEvent::BatchStart(TO_ALL)).unwrap();
+
+                for (px, qty) in bids {
+                    self.ev_tx
+                        .send(PublishEvent::LiveEvent(LiveEvent::Feed {
+                            symbol: symbol.clone(),
+                            event: Event {
+                                ev: LOCAL_BID_DEPTH_EVENT,
+                                exch_ts: now,
+                                local_ts: now,
+                                order_id: 0,
+                                px,
+                                qty,
+                                ival: 0,
+                                fval: 0.0,
+                            },
+                        }))
+                        .unwrap();
+                }
+
+                for (px, qty) in asks {
+                    self.ev_tx
+                        .send(PublishEvent::LiveEvent(LiveEvent::Feed {
+                            symbol: symbol.clone(),
+                            event: Event {
+                                ev: LOCAL_ASK_DEPTH_EVENT,
+                                exch_ts: now,
+                                local_ts: now,
+                                order_id: 0,
+                                px,
+                                qty,
+                                ival: 0,
+                                fval: 0.0,
+                            },
+                        }))
+                        .unwrap();
+                }
+
+                self.ev_tx.send(PublishEvent::BatchEnd(TO_ALL)).unwrap();
+            }
+            Err(error) => {
+                error!(?error, ?symbol, "Couldn't parse StandX depth book update");
+            }
+        }
+    }
+
+    fn process_public_trade(&mut self, symbol: String, trade: PublicTrade) {
+        if let Ok((px, qty)) = parse_px_qty_tup(trade.price, trade.qty) {
+            let exch_ts = trade
+                .time
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(&t).ok())
+                .and_then(|dt| dt.timestamp_nanos_opt())
+                .unwrap_or_else(|| Utc::now().timestamp_nanos_opt().unwrap_or_default());
+
+            self.ev_tx
+                .send(PublishEvent::LiveEvent(LiveEvent::Feed {
+                    symbol,
+                    event: Event {
+                        ev: EXCH_TRADE_EVENT,
+                        exch_ts,
+                        local_ts: Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+                        order_id: 0,
+                        px,
+                        qty,
+                        ival: 0,
+                        fval: 0.0,
+                    },
+                }))
+                .unwrap();
+        }
     }
 
     pub async fn connect(&mut self) -> Result<(), StandxError> {
@@ -58,8 +170,23 @@ impl MarketDataStream {
         while let Some(msg) = ws.next().await {
             let msg = msg?;
             if msg.is_text() {
-                if serde_json::from_str::<Frame>(&msg.to_text()?).is_err() {
-                    error!("failed to parse standx market data message");
+                match serde_json::from_str::<Frame>(&msg.to_text()?) {
+                    Ok(frame) => match frame.channel.as_str() {
+                        "depth_book" => {
+                            if let Ok(book) = serde_json::from_value::<DepthBook>(frame.data) {
+                                self.process_depth(frame.symbol, book);
+                            }
+                        }
+                        "public_trade" => {
+                            if let Ok(trade) = serde_json::from_value::<PublicTrade>(frame.data) {
+                                self.process_public_trade(frame.symbol, trade);
+                            }
+                        }
+                        _ => {}
+                    },
+                    Err(error) => {
+                        error!(?error, "failed to parse standx market data message");
+                    }
                 }
             }
             // Refresh subscriptions when new symbols arrive.
