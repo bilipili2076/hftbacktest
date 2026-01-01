@@ -123,7 +123,8 @@ impl StandxClient {
         );
         headers.insert(
             "x-request-signature",
-            HeaderValue::from_str(&base64::engine::general_purpose::STANDARD.encode(signature))
+            HeaderValue::from_str(&base64::engine::general_purpose::STANDARD
+                .encode(signature.to_bytes()))
                 .unwrap(),
         );
         Ok(headers)
