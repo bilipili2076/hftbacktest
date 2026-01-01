@@ -127,11 +127,19 @@ impl UserDataStream {
                                     .or_else(|| val.get("code"))
                                     .and_then(|c| c.as_i64());
 
-                                if channel == Some("auth") && code == Some(200) {
-                                    authed = true;
-                                    info!("standx private auth ok");
-                                } else if let Some(code) = code {
-                                    error!(code, "standx private auth failed");
+                                if channel == Some("auth") {
+                                    match code {
+                                        Some(0) | Some(200) => {
+                                            authed = true;
+                                            info!("standx private auth ok");
+                                        }
+                                        Some(code) => {
+                                            error!(code, "standx private auth failed");
+                                        }
+                                        None => {
+                                            error!("standx private auth missing code");
+                                        }
+                                    }
                                 }
                             }
 
