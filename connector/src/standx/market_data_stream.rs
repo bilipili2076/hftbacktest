@@ -374,7 +374,7 @@ impl MarketDataStream {
                 }
                 message = read.next() => match message {
                     Some(Ok(Message::Text(txt))) => {
-                        debug!(raw = %txt, "standx ws recv");
+                        // debug!(raw = %txt, "standx ws recv");
                         match serde_json::from_str::<Frame>(&txt) {
                             Ok(frame) => match frame.channel.as_str() {
                                 "depth_book" => {

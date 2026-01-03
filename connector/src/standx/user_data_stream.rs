@@ -115,7 +115,7 @@ impl UserDataStream {
                 }
                 message = read.next() => match message {
                     Some(Ok(Message::Text(txt))) => {
-                        debug!(raw = %txt, "standx ws recv");
+                        // debug!(raw = %txt, "standx ws recv");
 
                         // handle auth ack/err before decoding into channel events
                         if !authed {
@@ -163,7 +163,8 @@ impl UserDataStream {
 
                         match serde_json::from_str::<Frame>(&txt).map(|frame| frame.into_event()) {
                             Ok(StreamEvent::Order(update)) => {
-                                debug!(?update, "standx order update");
+                                debug!(symbol=%update.symbol, cl_ord_id=?update.cl_ord_id, status=?update.status, side=?update.side, qty=%update.qty, fill_qty=%update.fill_qty, price=?update.price, fill_avg_price=?update.fill_avg_price, updated_at=?update.updated_at, "standx order update");
+
                                 match self.order_manager.lock().unwrap().update_from_ws(&update) {
                                     Ok(Some(order)) => {
                                         self.ev_tx
@@ -177,7 +178,8 @@ impl UserDataStream {
                                     }
                                     Ok(None) => {}
                                     Err(error) => {
-                                        error!(?error, "order update rejected");
+                                        error!(?error, symbol=%update.symbol, cl_ord_id=?update.cl_ord_id, status=?update.status, "order update rejected");
+
                                         self.ev_tx
                                             .send(PublishEvent::LiveEvent(
                                                 hftbacktest::types::LiveEvent::Error(

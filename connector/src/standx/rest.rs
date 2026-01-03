@@ -2,11 +2,11 @@ use std::str::FromStr;
 
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey, pkcs8::DecodePrivateKey};
-use hftbacktest::types::{OrdType, Side, TimeInForce};
+use hftbacktest::types::{OrdType, Side, Status, TimeInForce};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use tokio::time::Duration;
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 use crate::standx::{
     StandxError,
@@ -203,6 +203,19 @@ impl StandxClient {
         };
 
         let payload = serde_json::to_string(&request)?;
+
+        debug!(
+            client_order_id = %client_order_id,
+            symbol = %symbol,
+            side = ?side,
+            order_type = ?order_type,
+            time_in_force = ?time_in_force,
+            price = ?price,
+            qty = qty,
+            payload = %payload,
+            "standx REST new_order -> sending"
+        );
+
         let mut headers = self.signing_headers(&payload)?;
         headers.insert(
             "x-session-id",
@@ -219,27 +232,110 @@ impl StandxClient {
             .await?;
         let status = resp.status();
         let body = resp.text().await?;
+
+        debug!(
+            client_order_id = %client_order_id,
+            status = %status,
+            body = %body,
+            "standx REST new_order <- ack raw"
+        );
+
         if !status.is_success() {
             return Err(StandxError::InvalidResponse(body));
         }
         let ack: BasicResponse = serde_json::from_str(&body)?;
+
+        debug!(
+            client_order_id = %client_order_id,
+            code = ack.code,
+            msg = %ack.message,
+            "standx REST new_order <- ack parsed"
+        );
+
         if ack.code != 0 {
+            warn!(
+                client_order_id = %client_order_id,
+                code = ack.code,
+                msg = %ack.message,
+                "standx REST new_order rejected"
+            );
             return Err(StandxError::OrderError(ack.message));
         }
 
-        self.query_order_by_client(client_order_id).await
+        debug!(
+            client_order_id = %client_order_id,
+            "standx REST query_order_by_client start (after new_order ack=0)"
+        );
+        let detail = OrderDetail {
+            // 这些字段名按你日志里出现过的来填：
+            id: None,
+            symbol: symbol.to_string(),
+            side,
+            order_type,
+            time_in_force,
+            status: Status::New,      // ← TODO: 换成你真实存在的“已发送/等待确认”状态
+            price: price.map(|p| p.to_string()),
+            qty: qty.to_string(),
+            fill_qty: "0".to_string(),
+            updated_at: None,
+
+            // 如果你的 OrderDetail 里有 cl_ord_id，强烈建议填上
+            // （如果没有这个字段，把这一行删掉）
+            cl_ord_id: Some(client_order_id.to_string()),
+            fill_avg_price: None,
+        };
+        Ok(detail)
+        // match self.query_order_by_client(client_order_id).await {
+        //     Ok(detail) => {
+        //         info!(
+        //             client_order_id = %client_order_id,
+        //             symbol = %detail.symbol,
+        //             order_id = ?detail.id,
+        //             status = ?detail.status,
+        //             price = ?detail.price,
+        //             qty = %detail.qty,
+        //             fill_qty = %detail.fill_qty,
+        //             updated_at = ?detail.updated_at,
+        //             "standx REST query_order_by_client ok"
+        //         );
+        //         Ok(detail)
+        //     }
+        //     Err(e) => {
+        //         warn!(
+        //             client_order_id = %client_order_id,
+        //             error = ?e,
+        //             "standx REST query_order_by_client FAILED after new_order ack=0 (this can cause ghost orders if treated as Expired)"
+        //         );
+        //         Err(e)
+        //     }
+        // }
     }
+
 
     pub async fn cancel_order(
         &self,
         client_order_id: &str,
-        _symbol: &str,
+        symbol: &str,
+        // 从调用处传入“取消前快照”，避免伪造错误字段/终态
+        side: Side,
+        order_type: OrdType,
+        time_in_force: TimeInForce,
+        cur_status: Status,
+        qty: f64,
+        fill_qty: f64,
     ) -> Result<OrderDetail, StandxError> {
         let request = CancelOrderRequest {
             order_id: None,
             cl_ord_id: Some(client_order_id.to_string()),
         };
         let payload = serde_json::to_string(&request)?;
+
+        debug!(
+            client_order_id = %client_order_id,
+            payload = %payload,
+            "standx REST cancel_order -> sending"
+        );
+
         let mut headers = self.signing_headers(&payload)?;
         headers.insert(
             "x-session-id",
@@ -256,16 +352,95 @@ impl StandxClient {
             .await?;
         let status = resp.status();
         let body = resp.text().await?;
+
+        debug!(
+            client_order_id = %client_order_id,
+            status = %status,
+            body = %body,
+            "standx REST cancel_order <- ack raw"
+        );
+
         if !status.is_success() {
             return Err(StandxError::InvalidResponse(body));
         }
         let ack: BasicResponse = serde_json::from_str(&body)?;
+
+        debug!(
+            client_order_id = %client_order_id,
+            code = ack.code,
+            msg = %ack.message,
+            "standx REST cancel_order <- ack parsed"
+        );
+
         if ack.code != 0 {
+            warn!(
+                client_order_id = %client_order_id,
+                code = ack.code,
+                msg = %ack.message,
+                "standx REST cancel_order rejected"
+            );
             return Err(StandxError::OrderError(ack.message));
         }
 
-        self.query_order_by_client(client_order_id).await
+        debug!(
+            client_order_id = %client_order_id,
+            "standx REST query_order_by_client start (after cancel_order ack=0)"
+        );
+        // let detail = OrderDetail {
+        //     id: None,
+        //     symbol: symbol.to_string(),
+        //     side: Side::Buy,
+        //     order_type: OrdType::Limit,
+        //     time_in_force: TimeInForce::GTC,
+        //     status: Status::Canceled,   // ← TODO: 换成你真实存在的“取消已发送/等待确认”状态
+        //     price: None,
+        //     qty: "0".to_string(),
+        //     fill_qty: "0".to_string(),
+        //     updated_at: None,
+        //     cl_ord_id: Some(client_order_id.to_string()),
+        //     fill_avg_price: None,
+        // };
+        Ok(OrderDetail {
+            id: None,
+            symbol: symbol.to_string(),
+            side,
+            order_type,
+            time_in_force,
+            status: Status::Canceled,          // ✅ 不要写 Canceled
+            price: None,                 // ✅ 避免覆盖 price_tick
+            qty: qty.to_string(),        // ✅ 保持原 qty
+            fill_qty: fill_qty.to_string(),
+            fill_avg_price: None,
+            updated_at: None,
+            cl_ord_id: Some(client_order_id.to_string()),
+        })
+        // Ok(detail)
+        // match self.query_order_by_client(client_order_id).await {
+        //     Ok(detail) => {
+        //         info!(
+        //             client_order_id = %client_order_id,
+        //             symbol = %detail.symbol,
+        //             order_id = ?detail.id,
+        //             status = ?detail.status,
+        //             price = ?detail.price,
+        //             qty = %detail.qty,
+        //             fill_qty = %detail.fill_qty,
+        //             updated_at = ?detail.updated_at,
+        //             "standx REST query_order_by_client ok (after cancel)"
+        //         );
+        //         Ok(detail)
+        //     }
+        //     Err(e) => {
+        //         warn!(
+        //             client_order_id = %client_order_id,
+        //             error = ?e,
+        //             "standx REST query_order_by_client FAILED after cancel_order ack=0"
+        //         );
+        //         Err(e)
+        //     }
+        // }
     }
+
 
     pub async fn query_order_by_client(
         &self,
@@ -283,9 +458,24 @@ impl StandxClient {
             "{}/api/query_order?cl_ord_id={}",
             self.api_url, client_order_id
         );
+
+        debug!(
+            client_order_id = %client_order_id,
+            url = %url,
+            "standx REST query_order_by_client -> sending"
+        );
+
         let resp = self.http.get(url).headers(headers).send().await?;
         let status = resp.status();
         let body = resp.text().await?;
+
+        debug!(
+            client_order_id = %client_order_id,
+            status = %status,
+            body = %body,
+            "standx REST query_order_by_client <- raw"
+        );
+
         if !status.is_success() {
             return Err(StandxError::InvalidResponse(body));
         }
@@ -293,4 +483,5 @@ impl StandxClient {
         let detail: OrderDetail = serde_json::from_str(&body)?;
         Ok(detail)
     }
+
 }

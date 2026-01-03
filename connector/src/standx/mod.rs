@@ -14,7 +14,7 @@ use serde::Deserialize;
 use thiserror::Error;
 use tokio::sync::{broadcast, broadcast::Sender, mpsc::UnboundedSender};
 use tokio_tungstenite::tungstenite;
-use tracing::error;
+use tracing::{debug, error, info, warn};
 
 use self::{
     ordermanager::{OrderManager, SharedOrderManager},
@@ -243,6 +243,20 @@ impl Connector for Standx {
                         Some(order.price_tick as f64 * order.tick_size)
                     };
 
+                    info!(
+                        symbol = %symbol,
+                        order_id = order.order_id,
+                        client_order_id = %client_order_id,
+                        side = ?order.side,
+                        order_type = ?order.order_type,
+                        tif = ?order.time_in_force,
+                        price_tick = order.price_tick,
+                        tick_size = order.tick_size,
+                        price = ?price,
+                        qty = order.qty,
+                        "standx submit: prepared client_order_id"
+                    );
+
                     let result = client
                         .new_order(
                             &client_order_id,
@@ -254,21 +268,47 @@ impl Connector for Standx {
                             order.time_in_force,
                         )
                         .await;
+
                     match result {
                         Ok(resp) => {
+                            info!(
+                                symbol = %symbol,
+                                order_id = order.order_id,
+                                client_order_id = %client_order_id,
+                                resp_order_id = ?resp.id,
+                                resp_status = ?resp.status,
+                                resp_price = ?resp.price,
+                                resp_qty = %resp.qty,
+                                resp_fill_qty = %resp.fill_qty,
+                                resp_updated_at = ?resp.updated_at,
+                                "standx submit: REST ok"
+                            );
+
                             if let Some(order) = order_manager
                                 .lock()
                                 .unwrap()
                                 .update_from_rest(&client_order_id, &resp)
                             {
-                                tx.send(PublishEvent::LiveEvent(LiveEvent::Order {
-                                    symbol,
-                                    order,
-                                }))
-                                .unwrap();
+                                tx.send(PublishEvent::LiveEvent(LiveEvent::Order { symbol, order }))
+                                    .unwrap();
+                            } else {
+                                debug!(
+                                    symbol = %symbol,
+                                    order_id = order.order_id,
+                                    client_order_id = %client_order_id,
+                                    "standx submit: update_from_rest returned None (already removed?)"
+                                );
                             }
                         }
                         Err(error) => {
+                            error!(
+                                symbol = %symbol,
+                                order_id = order.order_id,
+                                client_order_id = %client_order_id,
+                                error = ?error,
+                                "standx submit: REST new_order failed"
+                            );
+
                             if let Some(order) = order_manager
                                 .lock()
                                 .unwrap()
@@ -278,18 +318,31 @@ impl Connector for Standx {
                                     symbol: symbol.clone(),
                                     order,
                                 }))
-                                .unwrap();
+                                    .unwrap();
+                            } else {
+                                warn!(
+                                    symbol = %symbol,
+                                    order_id = order.order_id,
+                                    client_order_id = %client_order_id,
+                                    "standx submit: update_submit_fail returned None (already removed?)"
+                                );
                             }
 
                             tx.send(PublishEvent::LiveEvent(LiveEvent::Error(LiveError::with(
                                 ErrorKind::OrderError,
                                 error.into(),
                             ))))
-                            .unwrap();
+                                .unwrap();
                         }
                     }
                 }
                 None => {
+                    warn!(
+                        symbol = %symbol,
+                        order_id = order.order_id,
+                        price_tick = order.price_tick,
+                        "standx submit: prepare_client_order_id returned None (duplicate order_id_map hit?) -> mark Expired"
+                    );
                     order.req = Status::None;
                     order.status = Status::Expired;
                     tx.send(PublishEvent::LiveEvent(LiveEvent::Order { symbol, order }))
@@ -304,6 +357,12 @@ impl Connector for Standx {
         let order_manager = self.order_manager.clone();
 
         tokio::spawn(async move {
+            info!(
+                symbol = %symbol,
+                order_id = order.order_id,
+                "standx cancel: request received"
+            );
+
             let client_order_id = order_manager
                 .lock()
                 .unwrap()
@@ -311,49 +370,99 @@ impl Connector for Standx {
 
             match client_order_id {
                 Some(client_order_id) => {
-                    let result = client.cancel_order(&client_order_id, &symbol).await;
+                    debug!(
+                        symbol = %symbol,
+                        order_id = order.order_id,
+                        client_order_id = %client_order_id,
+                        "standx cancel: mapped order_id -> client_order_id"
+                    );
+
+                    let result = client
+                        .cancel_order(
+                            &client_order_id,
+                            &symbol,
+                            order.side,
+                            order.order_type,
+                            order.time_in_force,
+                            order.status,     // ✅ 取消前状态
+                            order.qty,
+                            order.exec_qty,
+                        )
+                        .await;
+                    // let result = client.cancel_order(&client_order_id, &symbol).await;
                     match result {
                         Ok(resp) => {
+                            info!(
+                                symbol = %symbol,
+                                order_id = order.order_id,
+                                client_order_id = %client_order_id,
+                                resp_order_id = ?resp.id,
+                                resp_status = ?resp.status,
+                                resp_price = ?resp.price,
+                                resp_qty = %resp.qty,
+                                resp_fill_qty = %resp.fill_qty,
+                                resp_updated_at = ?resp.updated_at,
+                                "standx cancel: REST ok"
+                            );
+
                             if let Some(order) = order_manager
                                 .lock()
                                 .unwrap()
                                 .update_from_rest(&client_order_id, &resp)
                             {
-                                tx.send(PublishEvent::LiveEvent(LiveEvent::Order {
-                                    symbol,
-                                    order,
-                                }))
-                                .unwrap();
+                                tx.send(PublishEvent::LiveEvent(LiveEvent::Order { symbol, order }))
+                                    .unwrap();
+                            } else {
+                                debug!(
+                                    symbol = %symbol,
+                                    order_id = order.order_id,
+                                    client_order_id = %client_order_id,
+                                    "standx cancel: update_from_rest returned None (already removed?)"
+                                );
                             }
                         }
                         Err(error) => {
+                            error!(
+                                symbol = %symbol,
+                                order_id = order.order_id,
+                                client_order_id = %client_order_id,
+                                error = ?error,
+                                "standx cancel: REST cancel_order failed"
+                            );
+
                             if let Some(order) = order_manager
                                 .lock()
                                 .unwrap()
                                 .update_cancel_fail(&client_order_id)
                             {
-                                tx.send(PublishEvent::LiveEvent(LiveEvent::Order {
-                                    symbol,
-                                    order,
-                                }))
-                                .unwrap();
+                                tx.send(PublishEvent::LiveEvent(LiveEvent::Order { symbol, order }))
+                                    .unwrap();
+                            } else {
+                                warn!(
+                                    symbol = %symbol,
+                                    order_id = order.order_id,
+                                    client_order_id = %client_order_id,
+                                    "standx cancel: update_cancel_fail returned None (already removed?)"
+                                );
                             }
 
                             tx.send(PublishEvent::LiveEvent(LiveEvent::Error(LiveError::with(
                                 ErrorKind::OrderError,
                                 error.into(),
                             ))))
-                            .unwrap();
+                                .unwrap();
                         }
                     }
                 }
                 None => {
                     error!(
+                        symbol = %symbol,
                         order_id = order.order_id,
-                        "client_order_id corresponding to order_id is not found"
+                        "standx cancel: client_order_id corresponding to order_id is not found (order_id_map miss)"
                     );
                 }
             }
         });
     }
+
 }

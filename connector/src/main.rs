@@ -93,6 +93,11 @@ fn run_receive_task(
                             tick_size,
                             lot_size,
                         } => {
+                            tracing::info!(%symbol, tick_size, lot_size, "RegisterInstrument received");
+                            if !tick_size.is_finite() || tick_size <= 0.0 || !lot_size.is_finite() || lot_size <= 0.0 {
+                                tracing::warn!(%symbol, tick_size, lot_size, "BAD tick_size/lot_size -> depth will become NaN");
+                            }
+
                             // Makes prepare the publisher thread to also add the instrument.
                             tx.send(PublishEvent::RegisterInstrument {
                                 id,
